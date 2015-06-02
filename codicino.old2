@@ -1,0 +1,490 @@
+      program codicino
+
+      implicit none
+
+      integer                 :: nx,ny,nptot,nsites,ntimes,ndim,nq
+      integer                 :: nup,plane,ord,binomial,nbasis
+      real*8                  :: t_h,U_h,Sz,dt
+
+      integer  :: i,j,k,l,m,r,s,t,cont,i1,i2,i3,i4,inn,it,idim
+      real*8   :: time
+
+      integer, dimension(:,:),   allocatable :: phi
+      integer, dimension(:,:),   allocatable :: occ
+      integer, dimension(:,:),   allocatable :: flag_t
+      integer, dimension(:),     allocatable :: bra,ket
+      integer, dimension(:),     allocatable :: site,spin
+      integer, dimension(:),     allocatable :: occupation
+      integer, dimension(:),     allocatable :: flag_u,sigma_z
+      
+
+      real *8   :: eps,pi,delta,fattore_bra,fattore_ket,overlap
+      parameter    (eps=1E-10)
+      parameter    (pi=dacos(-1.d0))
+
+      real*8, dimension(:),       allocatable :: epsilon
+      real*8, dimension(:,:),     allocatable :: H,H0,U,G,Rho
+      real*8, dimension(:,:,:),   allocatable :: Rhod
+      real*8, dimension(:,:),     allocatable :: Q,RS
+      complex*16                              :: eiqr,temp
+      real*8                                  :: epsilon_GS,dot
+      integer                                 :: dim_GS
+      real*8, dimension(:),       allocatable :: GS,GS2
+
+!     variabili lapack
+
+      real*8, dimension(:), allocatable       :: work
+      integer lwork,info
+      real*8 ddot
+
+!     lettura da file dei dati
+
+      write(*,*)'Good morning :-) '
+      write(*,*)'I am a serial ehd code for Hubbard model '
+      write(*,*)
+      write(*,*)
+      open(14,file='input.dat',status='old')
+      read(14,*)ndim
+      read(14,*)nx,ny
+      read(14,*)nptot
+      read(14,*)t_h
+      read(14,*)U_h
+      read(14,*)nq
+      read(14,*)ntimes
+      read(14,*)dt
+      close(14)
+
+      write(*,*)
+      write(*,*)'******************************************************'
+      write(*,*)'*    HUBBARD HAMILTONIAN EXACT DIAGONALIZATION       *'
+      write(*,*)'*                     VERSION 1.0                    *'
+      write(*,*)'******************************************************'
+
+      if(nptot.ne.4.or.nx.ne.2.or.ny.ne.2)then
+       write(*,*)'ABNORMAL END OF EXECUTION'
+       write(*,*)'UNAVAILABLE SYSTEM CHOSEN'
+       stop
+      endif
+      nsites=nx*ny
+      allocate(occupation(nsites))
+      write(*,*)'number of sites ',nsites
+      write(*,*)'number of particles ',nptot
+      plane=2*nx*ny
+      write(*,*)'single particle basis, number of elements = ',plane
+      ord=binomial(plane,nptot)
+      write(*,*)'slater determinant basis, number of elements = ',ord
+
+      allocate(site(plane))
+      allocate(spin(plane))
+! mapping between labeling of states and site/spin
+      j=0
+      do i=1,plane,2
+       j=j+1
+       site(i)=j
+       site(i+1)=j
+       spin(i)=1
+       spin(i+1)=-1
+      enddo
+      write(*,*)'check '
+      write(*,*)site
+      write(*,*)spin
+
+!hopping map
+      allocate(flag_t(plane,plane))
+      flag_t(:,:)=0.d0
+      do i=1,plane
+       do j=i+1,plane
+        call nn(site(i),site(j),spin(i),spin(j),inn)
+        if(inn.eq.1)then
+         write(*,*)'sites ',site(i),site(j)
+         write(*,*)'nn ',i,j
+         write(*,*)
+         flag_t(i,j)=1
+         flag_t(j,i)=1
+        endif
+       enddo
+      enddo
+
+
+      cont=0
+      do i1=1,plane
+       do i2=i1+1,plane
+        do i3=i2+1,plane
+         do i4=i3+1,plane
+          Sz=spin(i1)+spin(i2)+spin(i3)+spin(i4)
+          if(Sz.eq.0)cont=cont+1
+         enddo
+        enddo
+       enddo
+      enddo
+
+      ord=cont !binomial(plane,nptot)
+      write(*,*)'slater determinant basis, number of elements = ',ord
+
+
+      allocate(flag_u(ord))
+      flag_u(:)=0     
+      allocate(sigma_z(ord))
+
+      allocate(phi(ord,nptot))
+      allocate(occ(ord,plane))
+      occ(:,:)=0
+      write(*,*)'hilbert space basis: '
+      cont=1
+      do i1=1,plane
+       do i2=i1+1,plane
+        do i3=i2+1,plane
+         do i4=i3+1,plane
+          occupation(:)=0
+
+          Sz=spin(i1)+spin(i2)+spin(i3)+spin(i4)
+          if(Sz.eq.0)then
+           occupation(:)=0
+        
+           phi(cont,1)=i1
+           phi(cont,2)=i2
+           phi(cont,3)=i3
+           phi(cont,4)=i4
+ 
+           sigma_z(cont)=Sz
+
+           occ(cont,i1)=occ(cont,i1)+1
+           occ(cont,i2)=occ(cont,i2)+1
+           occ(cont,i3)=occ(cont,i3)+1
+           occ(cont,i4)=occ(cont,i4)+1       
+           occupation(site(i1))=occupation(site(i1))+1
+           occupation(site(i2))=occupation(site(i2))+1
+           occupation(site(i3))=occupation(site(i3))+1
+           occupation(site(i4))=occupation(site(i4))+1
+
+!          write(*,*)'phi(',cont,') -> ',i1,i2,i3,i4
+           do i=1,nsites
+            if(occupation(i).gt.1)then
+             flag_u(cont)=flag_u(cont)+1
+            endif
+           enddo
+
+           write(*,*)'*********************************************'
+           write(*,*)'determinant ',cont
+           write(*,*)'check flag_u '
+           write(*,*)'occupation ',occupation
+           write(*,*)'orbitals ',i1,i2,i3,i4
+           write(*,*)'sites ',site(i1),site(i2),site(i3),site(i4)
+           write(*,*)'spins ',spin(i1),spin(i2),spin(i3),spin(i4)
+           write(*,*)'flag_u ',flag_u(cont)
+           write(*,*)Sz,' spin '
+           write(*,*)
+           write(*,*)
+
+           cont=cont+1
+          endif
+         enddo
+        enddo
+       enddo
+      enddo
+
+      write(*,*)'******************************************************'
+      write(*,*)'Building hamiltonian matrix for the toy problem ...'
+      write(*,*)'Please wait :-) '
+      write(*,*)
+
+      allocate(H0(ord,ord))
+      allocate(H(ord,ord))
+      allocate(bra(nptot))
+      allocate(ket(nptot))
+
+      H0(:,:)=0.d0
+      H(:,:)=0.d0
+
+! Kinetic energy
+      do i=1,ord
+       do j=1,ord
+        do m=1,plane
+         do t=1,plane
+          if(flag_t(m,t).ne.0)then
+           do k=1,nptot
+            bra(k)=phi(i,k)
+            ket(k)=phi(j,k)
+           enddo
+           fattore_bra=1.d0
+           fattore_ket=1.d0
+           call destroy(ket,nptot,t,plane,fattore_ket)
+           if(fattore_ket.eq.0)go to 45
+           call destroy(bra,nptot,m,plane,fattore_bra)
+           if(fattore_bra.eq.0)go to 45
+           overlap=fattore_bra*fattore_ket
+           do k=1,nptot
+            overlap=overlap*delta(bra(k),ket(k))
+           enddo
+           H0(i,j)=H0(i,j)-t_h*overlap
+           H(i,j)=H(i,j)-t_h*overlap
+          endif
+ 45       continue
+         enddo
+        enddo
+       enddo
+      enddo
+      deallocate(flag_t)
+
+! Potential energy (diagonal in coordinates representation)
+      do i=1,ord
+       H(i,i)=H(i,i)+U_h*flag_u(i)
+      enddo
+      deallocate(flag_u)
+         
+      write(*,*)'matrix H ready, see h_ij.out for details'
+      write(*,*)
+      call print_matrix('h_ij.out',H,ord)
+
+      write(*,*)'matrix H0 inizialized, see h0_ij.out for details'
+      call print_matrix('h0_ij.out',H0,ord)
+
+
+      write(*,*)'******************************************************'
+
+!      deallocate(bra)
+!      deallocate(ket)
+!      deallocate(phi)
+!      deallocate(n)
+
+      write(*,*)'******************************************************'
+
+      allocate(U(ord,ord))
+      allocate(epsilon(ord))
+      lwork=3*ord
+      allocate(work(lwork))
+      do i=1,ord
+       do j=1,ord
+        U(i,j)=H(i,j)
+       enddo
+      enddo
+
+      call dsyev('V','U',ord,U,ord,epsilon,work,lwork,info)
+      call print_array('epsilon_i.out',epsilon,ord)
+      deallocate(work)
+      write(*,*)'see epsilon_i.out for eigenvalues of H'
+      write(*,*)'see psi_ij.out for eigenvectors of H'
+      write(*,*)'******************************************************'
+
+      open(14,file='psi_ij.out')
+      write(14,*)'eigenvectors of H'
+      write(14,*)'*****************************************************'
+      do i=1,ord
+       write(14,*)'psi(',i,') = '
+       do j=1,ord
+        if(abs(U(j,i)).le.eps)then
+         write(14,*)'component ',j,0.d0,sigma_z(j)
+        else
+         write(14,*)'component ',j,U(j,i),sigma_z(j)
+        endif
+       enddo
+      enddo
+      write(14,*)'*****************************************************'
+      close(14)
+
+     
+      allocate(GS(ord))
+      allocate(GS2(ord))
+      epsilon_GS=epsilon(1)
+      dim_GS=1
+
+      GS2=0.d0
+      GS2(1)=1.d0
+
+
+      write(*,*)'ground state computed'
+      write(*,*)'see GS2.out for ground state in spectral basis'
+      call print_array('GS2.out',GS2,ord)
+
+      GS=MATMUL(U,GS2)
+      write(*,*)'see GS.out for ground state in the original basis'
+      call print_array('GS.out',GS,ord)
+
+      write(*,*)
+      write(*,*)'Alert!!!!!!: check espilon_i for degeneracies'
+      write(*,*)
+      write(*,*)'energy per particle:'
+      write(*,*)
+      write(*,*)'ground state            ',epsilon_GS/dble(nptot)
+      open(14,file='epsilon_GS.out')
+       write(14,*)epsilon_GS/dble(nptot)
+      close(14)
+
+! Static Green function G(i,j) = <Psi_0 | a+_i a_j | Psi_0>
+      allocate(G(plane,plane))
+      G(:,:)=0.d0
+      do i=1,plane
+       do j=1,plane
+        do i1=1,ord
+         do i2=1,ord
+          do k=1,nptot
+           bra(k)=phi(i1,k)
+           ket(k)=phi(i2,k)
+          enddo
+          fattore_bra=1.d0
+          fattore_ket=1.d0
+          call destroy(ket,nptot,j,plane,fattore_ket)
+          if(fattore_ket.eq.0)go to 46
+          call destroy(bra,nptot,i,plane,fattore_bra)
+          if(fattore_bra.eq.0)go to 46
+          overlap=fattore_bra*fattore_ket
+          do k=1,nptot
+           overlap=overlap*delta(bra(k),ket(k))
+          enddo
+          G(i,j)=G(i,j)+U(i1,1)*overlap*U(i2,1)
+ 46       continue
+         enddo
+        enddo
+       enddo
+      enddo
+      open(36,file='greenc_ij.out')
+      do i=1,plane
+       do j=1,plane
+        if(abs(G(i,j)).le.eps)then
+         write(36,*)0.d0,i,j
+        else
+         write(36,*)G(i,j),i,j
+        endif
+       enddo
+      enddo
+      close(36)
+      deallocate(G)
+
+! Static Density-Density correlation function 
+! Rho(i,j) =  <Psi_0 | a+_i a_i  a+_j a_j | Psi_0>
+      allocate(Rho(plane,plane))
+      Rho(:,:)=0.d0
+      do i=1,plane
+       do j=1,plane
+        do i1=1,ord
+         Rho(i,j)=Rho(i,j)+U(i1,1)*occ(i1,i)*occ(i1,j)*U(i1,1)
+        enddo
+       enddo
+      enddo
+      open(37,file='densdensc_ij.out')
+      do i=1,plane
+       do j=1,plane
+        if(abs(Rho(i,j)).le.eps)then
+         write(37,*)0.d0,i,j
+        else
+         write(37,*)Rho(i,j),i,j
+        endif
+       enddo
+      enddo
+      close(37)
+      deallocate(Rho)   
+
+! Dynamical Density-Density correlation function 
+! Rho(i,j; t) =  <Psi_0 | a+_i a_i exp(-t (H - E_0)) a+_j a_j | Psi_0>
+      allocate(Rhod(plane,plane,ntimes))
+      Rhod(:,:,:)=0.d0
+      do it=1,ntimes
+       time=dt*dble(it-1)
+
+       do i=1,plane
+        do j=1,plane
+
+         do i1=1,ord
+          do i2=1,ord
+           do t=1,ord
+            Rhod(i,j,it)=Rhod(i,j,it)+                                 &
+             U(i1,1)*U(i1,t)*U(i2,t)*U(i2,1)*occ(i1,i)*occ(i2,j)       &
+             *exp(-time*(epsilon(t)-epsilon(1)))    
+           enddo
+          enddo
+         enddo
+
+        enddo
+       enddo
+      enddo
+
+      open(38,file='dens_t_densc_ij.out')
+      do it=1,ntimes
+       time=dt*dble(it-1)
+       do i=1,plane
+        do j=1,plane
+         if(abs(Rhod(i,j,it)).le.eps)then
+          write(38,*)time,0.d0,i,j
+         else
+          write(38,*)time,Rhod(i,j,it),i,j
+         endif
+        enddo
+       enddo
+       write(38,*)
+       write(38,*)
+      enddo
+      close(38)
+
+      allocate(Q(0:ndim,nq))
+      allocate(RS(ndim,nptot))
+! wave vectors
+      open(15,file='q.dat',status='old')
+      do i=1,nq
+       read(15,*)Q(1,i),Q(2,i)
+       Q(1,i)=Q(1,i)*pi
+       Q(2,i)=Q(2,i)*pi
+      enddo
+      close(15)
+      do i=1,nq
+       Q(0,i)=0.d0
+       do j=1,ndim
+        Q(0,i)=Q(0,i)+Q(j,i)**2
+       enddo
+       Q(0,i)=sqrt(Q(0,i))
+      enddo
+
+!sites
+      RS(1,1)=-0.5
+      RS(2,1)=0.5
+      RS(1,2)=0.5
+      RS(2,2)=0.5
+      RS(1,3)=-0.5
+      RS(2,3)=-0.5
+      RS(1,4)=0.5
+      RS(2,4)=-0.5   
+     
+      open(39,file='dens_t_denswv_q.out')    
+      do i=1,nq  
+       do it=1,ntimes
+        time=dt*dble(it-1)
+
+        temp=dcmplx(0.d0,0.d0)
+        do i1=1,plane
+         do i2=1,plane
+! build exp(-i Q (R-S))
+          dot=0.d0
+          do idim=1,ndim
+           dot=dot+Q(idim,i)*(RS(idim,site(i1))-RS(idim,site(i2)))
+          enddo
+          eiqr=exp(-dcmplx(0.d0,1.d0)*dot)
+          temp=temp+eiqr*Rhod(i1,i2,it)
+         enddo
+        enddo
+        write(39,*)time,real(temp)/dble(nptot),Q(0,i)
+
+       enddo
+       write(39,*)
+       write(39,*) 
+      enddo
+      close(39)
+ 
+
+      end program codicino
+
+
+      subroutine nn(i,j,si,sj,f)
+
+      implicit none
+      integer, intent(in) :: i,j,si,sj
+      integer, intent(out):: f
+  
+      f=0
+      if(si.eq.sj)then
+       if(i.eq.1.and.j.eq.2)f=1
+       if(i.eq.1.and.j.eq.3)f=1
+       if(i.eq.2.and.j.eq.4)f=1
+       if(i.eq.3.and.j.eq.4)f=1
+      endif
+
+      return
+      end
